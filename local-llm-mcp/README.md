@@ -12,7 +12,25 @@ changing `VLLM_URL`.
 - `generate(prompt, system?, temperature?, max_tokens?)` — one completion.
 - `generate_batch(prompts[], system?, temperature?, max_tokens?)` — many prompts
   fired concurrently; results align 1:1 with input. Use for fan-out/bulk work.
+- `summarize_files(paths[], instruction, system?, temperature?, max_tokens?)` —
+  applies `instruction` to each file's CONTENTS concurrently. The **server reads
+  the files**, so their contents never enter Claude's context — only the condensed
+  results return. `paths` accepts globs (e.g. `src/**/*.py`). This is the correct
+  tool for offloading bulk file processing while protecting Claude's context.
 - `health()` — check the server is reachable and which model is loaded.
+
+### Files: keep contents out of Claude's context
+
+The model only takes text. A file "works" only when its contents become text in
+the prompt — and the point of the apprentice pattern is that Claude must NOT be
+the one reading them (that routes the volume through Claude's context and defeats
+the purpose). Use `summarize_files`, which reads paths/globs server-side, rather
+than reading files with Claude and passing them to `generate`/`generate_batch`.
+
+**Non-text files** (images, PDF, audio) are not readable by this text model.
+Extract text first (OCR/parser) or route them to a multimodal model — Qwen3.8-27B
+here is text-only. `summarize_files` reads files as UTF-8 and truncates each to
+`LLM_MAX_FILE_CHARS` (default 200k chars).
 
 ## 1. Serve the model with vLLM (on the RTX 5090, Linux/CUDA)
 

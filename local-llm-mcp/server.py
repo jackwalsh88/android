@@ -16,10 +16,13 @@ Env vars:
 """
 
 import asyncio
+import glob as globlib
 import os
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+
+MAX_FILE_CHARS = int(os.environ.get("LLM_MAX_FILE_CHARS", "200000"))
 
 VLLM_URL = os.environ.get("VLLM_URL", "http://localhost:8000/v1").rstrip("/")
 MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3.8-27B")
@@ -91,6 +94,54 @@ async def generate_batch(
             _complete(client, p, system, temperature, max_tokens) for p in prompts
         ]
         return await asyncio.gather(*tasks)
+
+
+def _read_file(path: str) -> str:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read(MAX_FILE_CHARS)
+
+
+@mcp.tool()
+async def summarize_files(
+    paths: list[str],
+    instruction: str,
+    system: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1024,
+) -> list[dict]:
+    """Apply `instruction` to each file's CONTENTS on the local model, concurrently.
+
+    The server reads each file itself, so file contents NEVER enter Claude's
+    context — only the model's condensed results return. This is the correct way
+    to offload bulk file processing (summaries, extraction, classification) while
+    protecting Claude's context window.
+
+    `paths` may include glob patterns (e.g. "src/**/*.py"); they are expanded
+    server-side. Each file is truncated to LLM_MAX_FILE_CHARS (default 200k).
+    `instruction` is the per-file task, e.g. "List SQL-injection-prone lines as
+    JSON: [{line, tainted_var}]." Returns one {path, result} per file, in order;
+    unreadable files return {path, error}. Low temperature by default for
+    deterministic extraction.
+    """
+    expanded: list[str] = []
+    for p in paths:
+        matches = globlib.glob(p, recursive=True)
+        expanded.extend(sorted(matches) if matches else [p])
+
+    async def _one(client: httpx.AsyncClient, path: str) -> dict:
+        try:
+            content = _read_file(path)
+        except Exception as e:  # noqa: BLE001
+            return {"path": path, "error": str(e)}
+        prompt = f"{instruction}\n\n--- FILE: {path} ---\n{content}"
+        try:
+            out = await _complete(client, prompt, system, temperature, max_tokens)
+            return {"path": path, "result": out}
+        except Exception as e:  # noqa: BLE001
+            return {"path": path, "error": str(e)}
+
+    async with httpx.AsyncClient(timeout=600) as client:
+        return await asyncio.gather(*[_one(client, p) for p in expanded])
 
 
 @mcp.tool()
