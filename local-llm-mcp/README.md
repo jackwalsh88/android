@@ -17,7 +17,24 @@ changing `VLLM_URL`.
   the files**, so their contents never enter Claude's context — only the condensed
   results return. `paths` accepts globs (e.g. `src/**/*.py`). This is the correct
   tool for offloading bulk file processing while protecting Claude's context.
+- `describe_images(paths[], instruction, system?, temperature?, max_tokens?)` —
+  applies `instruction` to each IMAGE concurrently (vision). Server reads and
+  base64-encodes the images, so bytes never enter Claude's context. Requires a
+  vision-capable model; errors against a text-only one. Use for OCR, description,
+  classification, extracting fields from screenshots/receipts.
 - `health()` — check the server is reachable and which model is loaded.
+
+### Vision
+
+Qwen3.8-27B appears to be natively multimodal (vision-language) per current
+coverage — VERIFY on the official model card, and confirm the checkpoint you
+serve carries the vision encoder. To use `describe_images`, serve a
+vision-capable model and enable multimodal input in vLLM, e.g.:
+```
+vllm serve Qwen/Qwen3.8-27B-FP8 --limit-mm-per-prompt image=4 --port 8000
+```
+(Flag names/values vary by vLLM version; check `vllm serve --help`.) Against a
+text-only model, `describe_images` will error at request time.
 
 ### Files: keep contents out of Claude's context
 
@@ -27,10 +44,11 @@ the one reading them (that routes the volume through Claude's context and defeat
 the purpose). Use `summarize_files`, which reads paths/globs server-side, rather
 than reading files with Claude and passing them to `generate`/`generate_batch`.
 
-**Non-text files** (images, PDF, audio) are not readable by this text model.
-Extract text first (OCR/parser) or route them to a multimodal model — Qwen3.8-27B
-here is text-only. `summarize_files` reads files as UTF-8 and truncates each to
-`LLM_MAX_FILE_CHARS` (default 200k chars).
+`summarize_files` handles text files (read as UTF-8, truncated to
+`LLM_MAX_FILE_CHARS`, default 200k chars). For **images**, use `describe_images`
+with a vision-capable model (see Vision above). **PDF/audio** are not directly
+readable — extract text first (PDF parser, OCR, transcription), then feed the
+text to `summarize_files`.
 
 ## 1. Serve the model with vLLM (on the RTX 5090, Linux/CUDA)
 

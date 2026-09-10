@@ -16,7 +16,9 @@ Env vars:
 """
 
 import asyncio
+import base64
 import glob as globlib
+import mimetypes
 import os
 
 import httpx
@@ -136,6 +138,90 @@ async def summarize_files(
         prompt = f"{instruction}\n\n--- FILE: {path} ---\n{content}"
         try:
             out = await _complete(client, prompt, system, temperature, max_tokens)
+            return {"path": path, "result": out}
+        except Exception as e:  # noqa: BLE001
+            return {"path": path, "error": str(e)}
+
+    async with httpx.AsyncClient(timeout=600) as client:
+        return await asyncio.gather(*[_one(client, p) for p in expanded])
+
+
+async def _complete_vision(
+    client: httpx.AsyncClient,
+    prompt: str,
+    image_data_uri: str,
+    system: str | None,
+    temperature: float,
+    max_tokens: int,
+) -> str:
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append(
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_data_uri}},
+            ],
+        }
+    )
+    payload = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    async with _sem:
+        resp = await client.post(
+            f"{VLLM_URL}/chat/completions", json=payload, headers=_headers
+        )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+def _image_data_uri(path: str) -> str:
+    mime, _ = mimetypes.guess_type(path)
+    if not mime or not mime.startswith("image/"):
+        mime = "image/png"
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+@mcp.tool()
+async def describe_images(
+    paths: list[str],
+    instruction: str,
+    system: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1024,
+) -> list[dict]:
+    """Apply `instruction` to each IMAGE on the local model, concurrently (vision).
+
+    Requires a vision-capable model served with multimodal support (e.g. a Qwen
+    VL / natively-multimodal checkpoint). Against a text-only model this errors.
+
+    The server reads and base64-encodes each image itself, so image bytes never
+    enter Claude's context — only the model's textual results return. Use this to
+    offload bulk image work: OCR, description, classification, extracting fields
+    from screenshots/receipts. `paths` accepts globs. Returns one {path, result}
+    per image (or {path, error}); results in order.
+    """
+    expanded: list[str] = []
+    for p in paths:
+        matches = globlib.glob(p, recursive=True)
+        expanded.extend(sorted(matches) if matches else [p])
+
+    async def _one(client: httpx.AsyncClient, path: str) -> dict:
+        try:
+            uri = _image_data_uri(path)
+        except Exception as e:  # noqa: BLE001
+            return {"path": path, "error": str(e)}
+        try:
+            out = await _complete_vision(
+                client, instruction, uri, system, temperature, max_tokens
+            )
             return {"path": path, "result": out}
         except Exception as e:  # noqa: BLE001
             return {"path": path, "error": str(e)}
