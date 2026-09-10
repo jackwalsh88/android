@@ -78,6 +78,53 @@ picture, which is worse than not delegating.
 **Scaffolding:**
 - Qwen generates boilerplate to a spec; Claude reviews and integrates.
 
+## Task catalog (what to delegate in Claude Code)
+
+Each is bulk/parallel/context-heavy with a cheaply verifiable output. Tool shown
+in parentheses. All follow delegate -> verify -> use.
+
+**Codebase understanding (protect context on entry)**
+- Repo onboarding map: one-line purpose + key exports per file (`summarize_files`).
+- "Where is X handled?": scan candidate files for a pattern, return hits as JSON
+  (`summarize_files`); Claude follows only real leads.
+- Dependency/usage census: every call site of a function/API before a change.
+
+**Change preparation (grunt before the judgment)**
+- Refactor reconnaissance: per file, list locations affected by a rename or
+  signature change; Claude plans and executes the edits.
+- Migration inventory: find deprecated `X` usages, classify each trivial/complex;
+  Claude handles the complex ones.
+- Boilerplate/scaffolding: stubs, DTOs, fixtures, config variants to a spec
+  (`generate_batch`); Claude wires them in.
+
+**Testing**
+- Test-gap survey: per source file, list untested public functions
+  (`summarize_files`); Claude writes the tests that matter.
+- First-draft unit tests at volume (`generate_batch`); Claude hardens edge cases
+  and confirms they run.
+
+**Review & quality triage**
+- First-pass diff/PR review across many files: flag obvious issues (unused vars,
+  missing error handling, style) as structured findings; Claude does the real
+  correctness/security review on flagged spots.
+- Log/stack-trace clustering: collapse thousands of CI/runtime lines into failure
+  categories; Claude root-causes from the clusters.
+
+**Data & docs**
+- Structured extraction from many config/JSON/CSV files into a normalized summary.
+- Docstring/comment drafting at volume; Claude corrects the wrong ones.
+- Changelog/release-note drafting from a batch of commit messages.
+
+**Vision (requires a VL checkpoint)**
+- Screenshot/receipt/form extraction into JSON at volume (`describe_images`).
+- UI diff triage: describe many before/after screenshots; Claude judges which
+  changes are regressions.
+
+**The test for "delegate this?"** All three must hold: high-volume or repetitive;
+output cheaply verifiable; doing it in Claude directly would burn context or money
+for no quality gain. Tasks where a wrong answer silently propagates (the actual
+fix, the security call, the architecture) stay with Claude.
+
 ## Prompting Qwen well (Claude's responsibility)
 
 - Give a complete, self-contained instruction — Qwen has none of Claude's context.
